@@ -1,6 +1,11 @@
 import express from 'express';
 import PocketBase from 'pocketbase';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import https from 'https';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 dotenv.config();
 
@@ -11,17 +16,28 @@ const port = process.env.PORT || 3038;
 const PB_USERNAME = process.env.PB_USERNAME;
 const PB_PASSWORD = process.env.PB_PASSWORD;
 
+const PHONE_NUMBER = process.env.TARGET_PHONE_NUMBER;
+
 let pbAuthToken = null;
 
-const authenticateWithPocketBase = async () => {
-  try {
-    const authData = await pb.collection("users").authWithPassword(PB_USERNAME, PB_PASSWORD);
-    pbAuthToken = authData.token;
-    console.log('Authenticated successfully with PocketBase');
-  } catch (error) {
-    console.error('Error authenticating with PocketBase:', error);
+const authenticateWithPocketBase = async (retries = 3, delay = 5000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const authData = await pb.collection("users").authWithPassword(PB_USERNAME, PB_PASSWORD);
+      pbAuthToken = authData.token;
+      console.log('Authenticated successfully with PocketBase');
+      return;
+    } catch (error) {
+      console.error(`Error authenticating with PocketBase (attempt ${i + 1}):`, error);
+      if (i < retries - 1) {
+        await new Promise(res => setTimeout(res, delay));
+      }
+    }
   }
+  console.error('Failed to authenticate with PocketBase after multiple attempts');
 };
+
+authenticateWithPocketBase();
 
 function parseMessage(message) {
   const response = {
@@ -77,8 +93,6 @@ function parseMessage(message) {
   return response;
 }
 
-authenticateWithPocketBase();
-
 app.use(express.json());
 
 app.post('/webhook/sms', async (req, res) => {
@@ -91,6 +105,12 @@ app.post('/webhook/sms', async (req, res) => {
 
     if (event !== 'sms:received') {
       return res.status(400).json({ error: 'Invalid event type' });
+    }
+
+    console.log('Received SMS:', payload);
+
+    if (payload.phoneNumber !== PHONE_NUMBER) {
+      return res.status(400).json({ error: 'Invalid payload' });
     }
 
     const messageRecord = await pb.collection('messages').create({
@@ -126,6 +146,20 @@ app.post('/webhook/sms', async (req, res) => {
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Webhook service listening on port ${port}`);
+const key = process.env.SSL_KEY;
+const cert = process.env.SSL_CERT;
+
+if (!key || !cert) {
+  console.error('SSL_KEY and SSL_CERT environment variables must be set.');
+  process.exit(1);
+}
+
+const sslOptions = {
+  key: Buffer.from(key, 'base64').toString('utf8'),
+  cert: Buffer.from(cert, 'base64').toString('utf8'),
+};
+
+const server = https.createServer(sslOptions, app);
+server.listen(port, '0.0.0.0', () => {
+  console.log(`Webhook service listening on port ${port} (HTTPS)`);
 });
