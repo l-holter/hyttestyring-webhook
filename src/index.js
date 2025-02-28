@@ -10,7 +10,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config();
 
 const app = express();
-const pb = new PocketBase('http://pocketbase:8095');
 const port = process.env.PORT || 3038;
 
 const PB_USERNAME = process.env.PB_USERNAME;
@@ -18,7 +17,27 @@ const PB_PASSWORD = process.env.PB_PASSWORD;
 
 const PHONE_NUMBER = process.env.TARGET_PHONE_NUMBER;
 
+const pb = new PocketBase('http://pocketbase:8095');
 let pbAuthToken = null;
+
+async function withRetry(operation, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      if (!pb.authStore.isValid) {
+        await authenticateWithPocketBase();
+      }
+      return await operation();
+    } catch (error) {
+      console.error(`Operation failed (attempt ${i + 1}):`, error);
+      if (i < maxRetries - 1) {
+        pb.authStore.clear();
+        await new Promise(res => setTimeout(res, 5000));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
 
 const authenticateWithPocketBase = async (retries = 3, delay = 5000) => {
   for (let i = 0; i < retries; i++) {
@@ -97,31 +116,25 @@ app.use(express.json());
 
 app.post('/webhook/sms', async (req, res) => {
   try {
-    if (!pbAuthToken) {
-      return res.status(403).json({ error: 'Not authenticated with PocketBase' });
-    }
-
     const { event, payload } = req.body;
 
     if (event !== 'sms:received') {
       return res.status(400).json({ error: 'Invalid event type' });
     }
 
-    console.log('Received SMS:', payload);
-
     if (payload.phoneNumber !== PHONE_NUMBER) {
       return res.status(400).json({ error: 'Invalid payload' });
     }
 
-    const messageRecord = await pb.collection('messages').create({
-      message: payload.message,
-      phoneNumber: payload.phoneNumber,
-      receivedAt: payload.receivedAt,
+    const messageRecord = await withRetry(async () => {
+      return await pb.collection('messages').create({
+        message: payload.message,
+        phoneNumber: payload.phoneNumber,
+        receivedAt: payload.receivedAt,
+      });
     });
 
     const parsed = parseMessage(payload.message);
-
-    console.log(parsed);
 
     for (const id of ['main', 'Stua1', 'Stua2', 'Sov1']) {
       if (parsed.temperatures[id] !== undefined) {
@@ -132,7 +145,9 @@ app.post('/webhook/sms', async (req, res) => {
           lastCommand: payload.message,
           lastCommandSuccess: true,
         };
-        await pb.collection('heating_state').update(id.toLowerCase(), heatingState);
+        await withRetry(async () => {
+          await pb.collection('heating_state').update(id.toLowerCase(), heatingState);
+        });
       }
     }
 
