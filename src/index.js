@@ -78,10 +78,10 @@ function parseMessage(message) {
       else if (line.includes('"Stua2"')) sensorId = 'Stua2';
       else if (line.includes('"Sov1"')) sensorId = 'Sov1';
 
-      const tempMatch = line.match(/(Hovedenhet|"[^"]+"):\s*(PÅ|AV)\s+(\d+)C/);
+      const tempMatch = line.match(/(Hovedenhet|"[^"]+"):\s*(PÅ|AV)\s+(-?\d+|--)?C/);
       if (tempMatch) {
         response.isHeatingOn[sensorId] = tempMatch[2] === 'PÅ';
-        response.temperatures[sensorId] = parseInt(tempMatch[3]);
+        response.temperatures[sensorId] = tempMatch[3] === '--' ? null : parseInt(tempMatch[3]);
         continue;
       }
 
@@ -91,19 +91,19 @@ function parseMessage(message) {
     }
   } else {
     for (const line of lines) {
-      const mainMatch = line.match(/Hovedenhet: (PÅ|AV)\s+(\d+)C\s*(T?)/);
+      const mainMatch = line.match(/Hovedenhet: (PÅ|AV)\s+(-?\d+|--)?C\s*(T?)/);
       if (mainMatch) {
         response.isHeatingOn.main = mainMatch[1] === 'PÅ';
-        response.temperatures.main = parseInt(mainMatch[2]);
+        response.temperatures.main = mainMatch[2] === '--' ? null : parseInt(mainMatch[2]);
         response.isFrostProtectionOn.main = mainMatch[3] === 'T';
         continue;
       }
 
-      const roomMatch = line.match(/"(Stua1|Stua2|Sov1)": (PÅ|AV), (\d+)C\s*(T?)/);
+      const roomMatch = line.match(/"(Stua1|Stua2|Sov1)": (PÅ|AV), (-?\d+|--)?C\s*(T?)/);
       if (roomMatch) {
         const room = roomMatch[1];
         response.isHeatingOn[room] = roomMatch[2] === 'PÅ';
-        response.temperatures[room] = parseInt(roomMatch[3]);
+        response.temperatures[room] = roomMatch[3] === '--' ? null : parseInt(roomMatch[3]);
         response.isFrostProtectionOn[room] = roomMatch[4] === 'T';
       }
     }
